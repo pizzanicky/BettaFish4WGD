@@ -226,6 +226,7 @@ checkpoints/
 # */dataset/
 # datasets/raw/
 # datasets/processed/
+db_data/
 
 # ==== MediaCrawler 相关 ====
 # 临时图片和媒体文件
