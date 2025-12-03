@@ -19,6 +19,7 @@ services:
       - ./insight_engine_streamlit_reports:/app/insight_engine_streamlit_reports
       - ./media_engine_streamlit_reports:/app/media_engine_streamlit_reports
       - ./query_engine_streamlit_reports:/app/query_engine_streamlit_reports
+      - ./MindSpider:/app/MindSpider
 
   db:
     image: postgres:15

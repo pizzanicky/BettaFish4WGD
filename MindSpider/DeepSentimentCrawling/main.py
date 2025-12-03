@@ -25,12 +25,13 @@ class DeepSentimentCrawling:
         """初始化深度情感爬取"""
         self.keyword_manager = KeywordManager()
         self.platform_crawler = PlatformCrawler()
-        self.supported_platforms = ['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu']
+        self.supported_platforms = ['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu', 'reddit']
     
     def run_daily_crawling(self, target_date: date = None, platforms: List[str] = None, 
                           max_keywords_per_platform: int = 50, 
                           max_notes_per_platform: int = 50,
-                          login_type: str = "qrcode") -> Dict:
+                          login_type: str = "qrcode",
+                          keywords: List[str] = None) -> Dict:
         """
         执行每日爬取任务
         
@@ -61,9 +62,12 @@ class DeepSentimentCrawling:
             print("⚠️ 没有找到话题数据，无法进行爬取")
             return {"success": False, "error": "没有话题数据"}
         
-        # 2. 获取关键词（不分配，所有平台使用相同关键词）
+        # 2. 获取关键词
         print(f"\n📝 获取关键词...")
-        keywords = self.keyword_manager.get_latest_keywords(target_date, max_keywords_per_platform)
+        if keywords:
+            print(f"   使用指定关键词: {keywords}")
+        else:
+            keywords = self.keyword_manager.get_latest_keywords(target_date, max_keywords_per_platform)
         
         if not keywords:
             print("⚠️ 没有找到关键词，无法进行爬取")
@@ -98,7 +102,8 @@ class DeepSentimentCrawling:
     
     def run_platform_crawling(self, platform: str, target_date: date = None,
                              max_keywords: int = 50, max_notes: int = 50,
-                             login_type: str = "qrcode") -> Dict:
+                             login_type: str = "qrcode",
+                             keywords: List[str] = None) -> Dict:
         """
         执行单个平台的爬取任务
         
@@ -121,9 +126,12 @@ class DeepSentimentCrawling:
         print(f"🎯 开始执行 {platform} 平台的爬取任务 ({target_date})")
         
         # 获取关键词
-        keywords = self.keyword_manager.get_keywords_for_platform(
-            platform, target_date, max_keywords
-        )
+        if keywords:
+            print(f"   使用指定关键词: {keywords}")
+        else:
+            keywords = self.keyword_manager.get_keywords_for_platform(
+                platform, target_date, max_keywords
+            )
         
         if not keywords:
             print(f"⚠️ 没有找到 {platform} 平台的关键词")
@@ -169,7 +177,8 @@ class DeepSentimentCrawling:
             'bili': 'B站 - 科技、学习、游戏、动漫内容',
             'wb': '微博 - 热点新闻、明星、社会话题',
             'tieba': '百度贴吧 - 兴趣讨论、游戏、学习',
-            'zhihu': '知乎 - 知识问答、深度讨论'
+            'zhihu': '知乎 - 知识问答、深度讨论',
+            'reddit': 'Reddit - 国际社区、兴趣讨论'
         }
         
         for platform, desc in platform_info.items():
@@ -193,11 +202,12 @@ def main():
     
     # 基本参数
     parser.add_argument("--date", type=str, help="目标日期 (YYYY-MM-DD)，默认为今天")
-    parser.add_argument("--platform", type=str, choices=['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu'], 
+    parser.add_argument("--platform", type=str, choices=['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu', 'reddit'], 
                        help="指定单个平台进行爬取")
     parser.add_argument("--platforms", type=str, nargs='+', 
-                       choices=['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu'],
+                       choices=['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu', 'reddit'],
                        help="指定多个平台进行爬取")
+    parser.add_argument("--keywords", type=str, help="指定爬取关键词，以逗号分隔")
     
     # 爬取参数
     parser.add_argument("--max-keywords", type=int, default=50, 
@@ -244,11 +254,16 @@ def main():
             args.max_notes = min(args.max_notes, 10)
             print("测试模式：限制关键词和内容数量")
         
+        # 解析关键词
+        keywords = args.keywords.split(',') if args.keywords else None
+        if keywords:
+            keywords = [k.strip() for k in keywords if k.strip()]
+
         # 单平台爬取
         if args.platform:
             result = crawler.run_platform_crawling(
                 args.platform, target_date, args.max_keywords, 
-                args.max_notes, args.login_type
+                args.max_notes, args.login_type, keywords
             )
             
             if result['success']:
@@ -262,7 +277,7 @@ def main():
         platforms = args.platforms if args.platforms else None
         result = crawler.run_daily_crawling(
             target_date, platforms, args.max_keywords, 
-            args.max_notes, args.login_type
+            args.max_notes, args.login_type, keywords
         )
         
         if result['success']:

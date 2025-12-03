@@ -1,0 +1,158 @@
+import asyncio
+from typing import List, Optional, Dict
+from datetime import datetime
+
+from base.base_crawler import AbstractCrawler
+from media_platform.reddit.client import RedditClient
+from database.models import WeiboNote, WeiboNoteComment
+from tools.utils import utils
+from var import crawler_type_var, source_keyword_var
+import config
+
+class RedditCrawler(AbstractCrawler):
+    def __init__(self):
+        self.client = RedditClient()
+        self.platform = "reddit"
+
+    async def launch_browser(self, chromium, playwright_proxy, user_agent, headless=True):
+        """
+        Dummy implementation for AbstractCrawler
+        """
+        pass
+
+    async def start(self):
+        """
+        Start the crawler
+        """
+        crawler_type = crawler_type_var.get()
+        if crawler_type == "search":
+            if config.KEYWORDS:
+                keywords = config.KEYWORDS.split(',')
+                for keyword in keywords:
+                    keyword = keyword.strip()
+                    if not keyword:
+                        continue
+                    source_keyword_var.set(keyword)
+                    await self.search()
+        elif crawler_type == "detail":
+            # Not fully implemented yet, but structure is here
+            pass
+        else:
+            pass
+
+    async def search(self):
+        """
+        Search Reddit and map to WeiboNote
+        """
+        keyword = source_keyword_var.get()
+        utils.logger.info(f"[RedditCrawler] Starting search for keyword: {keyword}")
+
+        try:
+            # Fetch data from Reddit
+            search_data = await self.client.search(keyword, limit=config.CRAWLER_MAX_NOTES_COUNT)
+            
+            if not search_data:
+                utils.logger.error(f"[RedditCrawler] Search returned empty response for keyword: {keyword}")
+                return
+
+            if 'data' not in search_data or 'children' not in search_data['data']:
+                utils.logger.error(f"[RedditCrawler] Invalid response structure. Keys found: {search_data.keys()}")
+                if 'error' in search_data:
+                    utils.logger.error(f"[RedditCrawler] Reddit Error: {search_data['error']}")
+                return
+
+            posts = search_data['data']['children']
+            utils.logger.info(f"[RedditCrawler] Found {len(posts)} posts for keyword: {keyword}")
+
+            for post in posts:
+                post_data = post['data']
+                await self._process_post(post_data, keyword)
+
+        except Exception as e:
+            utils.logger.error(f"[RedditCrawler] Search failed: {e}")
+
+    async def _process_post(self, post_data: Dict, keyword: str):
+        """
+        Process a single Reddit post and save as WeiboNote
+        """
+        try:
+            # 1. ID Conversion (Base36 -> Base10)
+            reddit_id_str = post_data.get('id', '')
+            if not reddit_id_str:
+                return
+            
+            # Convert Base36 string to Base10 integer
+            # Reddit IDs are like '1j2k3l', we treat them as base36 numbers
+            # User requirement: Strip prefix (e.g., t3_)
+            clean_id = reddit_id_str.split('_')[-1] if '_' in reddit_id_str else reddit_id_str
+            
+            try:
+                note_id_int = int(clean_id, 36)
+                note_id = note_id_int # Store as int for BigInteger column
+            except ValueError:
+                utils.logger.error(f"[RedditCrawler] Failed to convert ID {reddit_id_str} to int")
+                return
+
+            # 2. Content Mapping
+            title = post_data.get('title', '')
+            selftext = post_data.get('selftext', '')
+            content = f"{title}\n{selftext}"
+
+            # 3. Time Conversion
+            create_time = int(post_data.get('created_utc', 0) * 1000) # Milliseconds
+            create_date_time = datetime.fromtimestamp(post_data.get('created_utc', 0)).strftime('%Y-%m-%d %H:%M:%S')
+
+            # 4. Create WeiboNote object (Mapping)
+            note = WeiboNote()
+            note.note_id = note_id
+            note.content = content
+            note.create_time = create_time
+            note.create_date_time = create_date_time
+            note.liked_count = str(post_data.get('ups', 0))
+            note.comment_count = str(post_data.get('num_comments', 0))
+            note.shared_count = "0" # Reddit doesn't have exact share count in public API usually
+            
+            # Author info
+            note.user_id = post_data.get('author', 'unknown') # Reddit username as ID
+            note.nickname = post_data.get('author', 'unknown')
+            note.avatar = "" # No easy avatar URL in search results
+            
+            # URL
+            permalink = post_data.get('permalink', '')
+            note.note_url = f"https://www.reddit.com{permalink}"
+            
+            # CRITICAL: Source Keyword
+            note.source_keyword = keyword
+            
+            # Extra fields
+            note.ip_location = ""
+            
+            # Save to DB
+            utils.logger.info(f"[RedditCrawler] Saving post {reddit_id_str} (mapped ID: {note_id})")
+            await self._save_note(note)
+
+        except Exception as e:
+            utils.logger.error(f"[RedditCrawler] Error processing post: {e}")
+
+    async def _save_note(self, note: WeiboNote):
+        """
+        Save note to database
+        """
+        # This assumes db_utils has a generic save or we use specific update_weibo_note
+        # Since we are reusing WeiboNote, we should use the weibo store logic or generic logic.
+        # Let's import the weibo store function or implement a simple save here.
+        # For now, let's try to use a direct DB session or a store module.
+        
+        # Ideally we should have a store/reddit.py but we are mapping to Weibo tables.
+        # So we can use store/weibo.py functions IF they are generic enough, 
+        # OR just implement a simple insertion here using db_utils.
+        
+        # Let's create a helper in store/reddit.py that actually writes to weibo_note table
+        from media_platform.reddit.store import update_reddit_note_as_weibo
+        await update_reddit_note_as_weibo(note)
+
+    async def get_specified_notes(self):
+        pass
+
+    async def get_creators_and_notes(self):
+        pass

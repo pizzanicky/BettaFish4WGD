@@ -30,7 +30,7 @@ class PlatformCrawler:
     def __init__(self):
         """初始化平台爬虫管理器"""
         self.mediacrawler_path = Path(__file__).parent / "MediaCrawler"
-        self.supported_platforms = ['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu']
+        self.supported_platforms = ['xhs', 'dy', 'ks', 'bili', 'wb', 'tieba', 'zhihu', 'reddit']
         self.crawl_stats = {}
         
         # 确保MediaCrawler目录存在
@@ -54,11 +54,29 @@ class PlatformCrawler:
                 content = f.read()
             
             # PostgreSQL配置值：如果使用PostgreSQL则使用MindSpider配置，否则使用默认值或环境变量
-            pg_password = config.settings.DB_PASSWORD if is_postgresql else "bettafish"
-            pg_user = config.settings.DB_USER if is_postgresql else "bettafish"
-            pg_host = config.settings.DB_HOST if is_postgresql else "127.0.0.1"
-            pg_port = config.settings.DB_PORT if is_postgresql else 5432
-            pg_db_name = config.settings.DB_NAME if is_postgresql else "bettafish"
+            # PostgreSQL配置值：如果使用PostgreSQL则使用MindSpider配置，否则使用默认值或环境变量
+            # 添加对默认值的检查和回退逻辑
+            pg_host = config.settings.DB_HOST
+            if pg_host in ["your_host", "your_db_host"]:
+                pg_host = os.getenv("POSTGRES_HOST", "bettafish-db")
+                
+            pg_user = config.settings.DB_USER
+            if pg_user in ["your_username", "your_db_user"]:
+                pg_user = os.getenv("POSTGRES_USER", "bettafish")
+                
+            pg_password = config.settings.DB_PASSWORD
+            if pg_password in ["your_password", "your_db_password"]:
+                pg_password = os.getenv("POSTGRES_PASSWORD", "bettafish")
+                
+            pg_port = config.settings.DB_PORT
+            if pg_port == 3306:
+                pg_port = int(os.getenv("POSTGRES_PORT", 5432))
+            
+            pg_db_name = config.settings.DB_NAME
+            if pg_db_name in ["mindspider", "your_db_name"]:
+                pg_db_name = os.getenv("POSTGRES_DB", "bettafish")
+            
+            logger.info(f"DB Config - Host: {pg_host}, User: {pg_user}, DB: {pg_db_name}")
             
             # 替换数据库配置 - 使用MindSpider的数据库配置
             new_config = f'''# 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：  
@@ -75,11 +93,11 @@ class PlatformCrawler:
 import os
 
 # mysql config - 使用MindSpider的数据库配置
-MYSQL_DB_PWD = "{config.settings.DB_PASSWORD}"
-MYSQL_DB_USER = "{config.settings.DB_USER}"
-MYSQL_DB_HOST = "{config.settings.DB_HOST}"
-MYSQL_DB_PORT = {config.settings.DB_PORT}
-MYSQL_DB_NAME = "{config.settings.DB_NAME}"
+MYSQL_DB_PWD = "{pg_password}"
+MYSQL_DB_USER = "{pg_user}"
+MYSQL_DB_HOST = "{pg_host}"
+MYSQL_DB_PORT = {pg_port}
+MYSQL_DB_NAME = "{pg_db_name}"
 
 mysql_db_config = {{
     "user": MYSQL_DB_USER,
@@ -171,7 +189,7 @@ postgresql_db_config = {{
             
             for line in lines:
                 if line.startswith('PLATFORM = '):
-                    new_lines.append(f'PLATFORM = "{platform}"  # 平台，xhs | dy | ks | bili | wb | tieba | zhihu')
+                    new_lines.append(f'PLATFORM = "{platform}"  # 平台，xhs | dy | ks | bili | wb | tieba | zhihu | reddit')
                 elif line.startswith('KEYWORDS = '):
                     new_lines.append(f'KEYWORDS = "{keywords_str}"  # 关键词搜索配置，以英文逗号分隔')
                 elif line.startswith('CRAWLER_TYPE = '):
