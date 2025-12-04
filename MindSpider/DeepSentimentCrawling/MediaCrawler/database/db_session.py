@@ -3,8 +3,16 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
 from .models import Base
-import config
-from config.db_config import mysql_db_config, sqlite_db_config, postgresql_db_config
+try:
+    import config
+    # Check if this is the correct config (MediaCrawler's config has SAVE_DATA_OPTION)
+    if not hasattr(config, "SAVE_DATA_OPTION"):
+        raise ImportError("Loaded root config instead of MediaCrawler config")
+    from config.db_config import mysql_db_config, sqlite_db_config, postgresql_db_config
+except (ImportError, ModuleNotFoundError, AttributeError):
+    # Fallback to relative import (for when running as part of MindSpider package)
+    from .. import config
+    from ..config.db_config import mysql_db_config, sqlite_db_config, postgresql_db_config
 
 # Keep a cache of engines
 _engines = {}
