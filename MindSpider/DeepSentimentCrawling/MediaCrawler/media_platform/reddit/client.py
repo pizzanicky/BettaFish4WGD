@@ -1,67 +1,115 @@
 import httpx
 from typing import Dict, Optional, Any
 import asyncio
+import random
 from loguru import logger
 
 class RedditClient:
     def __init__(self, proxies: Optional[Dict] = None):
         self.proxies = proxies
+        
+        # 使用完整的真实浏览器请求头，模拟Chrome浏览器
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+            # 关键：添加Referer让请求看起来更真实
+            "Referer": "https://www.reddit.com/",
         }
         self.timeout = 30
+        
+        # Session cookies - 有助于绕过某些检测
+        self.cookies = {}
+        
+        logger.info("[RedditClient] 初始化完成 - 使用增强型浏览器头部（无需OAuth）")
 
     async def request(self, method: str, url: str, params: Optional[Dict] = None) -> Dict:
         """
-        Make an HTTP request to Reddit JSON endpoints
+        发送HTTP请求到Reddit JSON端点
         """
-        async with httpx.AsyncClient(proxy=self.proxies, timeout=self.timeout) as client:
+        # 添加随机延迟（0.5-2秒），避免被识别为机器人
+        delay = random.uniform(0.5, 2.0)
+        await asyncio.sleep(delay)
+        
+        async with httpx.AsyncClient(
+            proxy=self.proxies,  # httpx使用proxy而不是proxies
+            timeout=self.timeout,
+            follow_redirects=True,
+            cookies=self.cookies  # 使用session cookies
+        ) as client:
             try:
-                logger.info(f"[RedditClient] Requesting URL: {url} | Method: {method} | Params: {params}")
+                logger.info(f"[RedditClient] 请求URL: {url} | 方法: {method} | 参数: {params}")
                 response = await client.request(
                     method=method,
                     url=url,
                     headers=self.headers,
-                    params=params,
-                    follow_redirects=True
+                    params=params
                 )
-                logger.info(f"[RedditClient] Response Status: {response.status_code}")
-                if response.status_code == 200:
-                    logger.info(f"[RedditClient] Response Content (First 200 chars): {response.text[:200]}")
                 
-                response.raise_for_status()
-                return response.json()
+                # 保存cookies用于后续请求
+                if response.cookies:
+                    self.cookies.update(dict(response.cookies))
+                
+                logger.info(f"[RedditClient] 响应状态: {response.status_code}")
+                
+                if response.status_code == 200:
+                    logger.info(f"[RedditClient] 成功获取数据 (前200字符): {response.text[:200]}")
+                    return response.json()
+                elif response.status_code == 403:
+                    logger.error(f"[RedditClient] 403错误 - Reddit阻止了请求")
+                    logger.error(f"[RedditClient] 响应内容: {response.text[:500]}")
+                    logger.warning("[RedditClient] 建议：1) 检查是否开启VPN  2) 更换代理IP  3) 增加请求延迟")
+                    raise httpx.HTTPStatusError(f"403 Forbidden", request=response.request, response=response)
+                else:
+                    response.raise_for_status()
+                    return response.json()
+                    
             except httpx.HTTPStatusError as e:
-                logger.error(f"[RedditClient] HTTP Error: {e.response.status_code} - {e.response.text}")
+                logger.error(f"[RedditClient] HTTP错误: {e.response.status_code}")
+                logger.error(f"[RedditClient] 响应详情: {e.response.text[:500]}")
                 raise
             except Exception as e:
-                logger.error(f"[RedditClient] Request Failed: {e}")
+                logger.error(f"[RedditClient] 请求失败: {e}")
                 raise
 
     async def search(self, keyword: str, limit: int = 25) -> Dict:
         """
-        Search Reddit for a keyword
+        在Reddit搜索关键词
+        使用old.reddit.com端点，更稳定且不易被阻止
         """
-        url = "https://www.reddit.com/search.json"
+        # 使用old.reddit.com而不是www.reddit.com
+        # old版本的JSON端点更稳定，较少触发403
+        url = "https://old.reddit.com/search.json"
+        
         params = {
             "q": keyword,
             "limit": limit,
             "sort": "new",
-            "type": "link" # Only search for posts (links), not subreddits or users
+            "type": "link",  # 只搜索帖子，不包括子版块或用户
+            "t": "all"  # 时间范围：all (全部)
         }
+        
+        logger.info(f"[RedditClient] 使用old.reddit.com端点搜索: {keyword}")
         return await self.request("GET", url, params)
 
     async def get_comments(self, post_id: str) -> list:
         """
-        Get comments for a specific post
-        post_id: should be the ID without prefix (e.g., 'xyz123') or with prefix
+        获取指定帖子的评论
+        post_id: 可以是带前缀的ID (如't3_xyz')或纯ID (如'xyz')
         """
-        # Reddit ID usually comes as t3_xyz, but URL needs just xyz or full t3_xyz works too?
-        # Actually /comments/{id}.json works best with the ID.
-        # If input is t3_xyz, strip t3_
+        # 如果ID带有前缀 t3_，去掉前缀
         clean_id = post_id.split('_')[-1] if '_' in post_id else post_id
         
-        url = f"https://www.reddit.com/comments/{clean_id}.json"
+        # 同样使用old.reddit.com端点
+        url = f"https://old.reddit.com/comments/{clean_id}.json"
+        
+        logger.info(f"[RedditClient] 获取帖子评论: {clean_id}")
         return await self.request("GET", url)
