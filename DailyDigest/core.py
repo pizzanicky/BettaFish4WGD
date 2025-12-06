@@ -78,6 +78,95 @@ class SimpleLLM:
 class DailyDigest:
     def __init__(self):
         self.llm = SimpleLLM()
+    
+    async def crawl_reddit(self, keyword: str, max_count: int = 100):
+        """
+        爬取Reddit数据
+        使用subprocess调用MediaCrawler，避免导入冲突
+        返回: (success: bool, message: str, post_count: int)
+        """
+        try:
+            logger.info(f"[DailyDigest] Starting Reddit crawl for keyword: {keyword}")
+            
+            # 使用subprocess调用MediaCrawler的爬虫
+            import subprocess
+            import tempfile
+            
+            # 创建临时配置文件
+            config_content = f"""
+PLATFORM = "reddit"
+KEYWORDS = "{keyword}"
+LOGIN_TYPE = "qrcode"
+CRAWLER_TYPE = "search"
+CRAWLER_MAX_NOTES_COUNT = {max_count}
+SAVE_DATA_OPTION = "postgresql"
+"""
+            
+            # 写入临时配置
+            temp_config_path = media_crawler_root / "config" / "base_config_temp.py"
+            original_config_path = media_crawler_root / "config" / "base_config.py"
+            
+            # 备份原配置
+            import shutil
+            backup_path = media_crawler_root / "config" / "base_config_backup.py"
+            shutil.copy(original_config_path, backup_path)
+            
+            # 读取原配置并更新关键参数
+            with open(original_config_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            # 修改配置
+            import re
+            modified_content = original_content
+            modified_content = re.sub(r'KEYWORDS = .*', f'KEYWORDS = "{keyword}"', modified_content)
+            modified_content = re.sub(r'CRAWLER_MAX_NOTES_COUNT = .*', f'CRAWLER_MAX_NOTES_COUNT = {max_count}', modified_content)
+            
+            # 写入修改后的配置
+            with open(original_config_path, 'w', encoding='utf-8') as f:
+                f.write(modified_content)
+            
+            # 运行爬虫
+            cmd = [
+                'python3',
+                str(media_crawler_root / 'main.py'),
+                '--platform', 'reddit',
+                '--lt', 'qrcode',
+                '--type', 'search',
+                '--save_data_option', 'postgresql'
+            ]
+            
+            logger.info(f"[DailyDigest] Running crawler command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                cwd=str(media_crawler_root),
+                capture_output=True,
+                text=True,
+                timeout=120  # 2分钟超时
+            )
+            
+            # 恢复原配置
+            shutil.move(backup_path, original_config_path)
+            
+            if result.returncode != 0:
+                logger.error(f"[DailyDigest] Crawler failed with code {result.returncode}")
+                logger.error(f"[DailyDigest] Stderr: {result.stderr}")
+                return False, f"爬取失败: {result.stderr[:200]}", 0
+            
+            # Check how many posts were crawled
+            posts = await self.get_recent_posts(keyword, hours=24)
+            post_count = len(posts)
+            
+            logger.info(f"[DailyDigest] Crawl completed. Found {post_count} posts for '{keyword}'")
+            
+            return True, f"成功爬取 {post_count} 条帖子", post_count
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"[DailyDigest] Crawler timeout after 120s")
+            return False, "爬取超时（超过2分钟）", 0
+        except Exception as e:
+            logger.error(f"[DailyDigest] Crawl failed: {e}")
+            return False, f"爬取失败: {str(e)}", 0
 
     async def get_recent_posts(self, keyword: str, hours: int = 24):
         """
@@ -207,13 +296,59 @@ class DailyDigest:
                 "message": f"Error generating summary: {str(e)}"
             }
 
-# Helper function for synchronous execution (e.g. from Streamlit)
+# Helper functions for synchronous execution (e.g. from Streamlit)
+def run_crawl(keyword: str, max_count: int = 100):
+    """
+    同步执行爬取
+    返回: (success: bool, message: str, post_count: int)
+    """
+    clear_engine_cache()
+    digest = DailyDigest()
+    return asyncio.run(digest.crawl_reddit(keyword, max_count))
+
 def run_digest_generation(keyword: str, hours: int = 24):
+    """
+    同步执行摘要生成
+    """
     # Clear engine cache to avoid "attached to a different loop" error
     # because asyncio.run creates a new loop each time
     clear_engine_cache()
     digest = DailyDigest()
     return asyncio.run(digest.generate_digest(keyword, hours))
+
+def run_crawl_and_digest(keyword: str, hours: int = 24, max_count: int = 100):
+    """
+    一键执行：爬取 + 生成摘要
+    返回: {
+        "crawl_success": bool,
+        "crawl_message": str,
+        "post_count": int,
+        "digest_result": dict  # 摘要结果
+    }
+    """
+    # Step 1: 爬取
+    crawl_success, crawl_message, post_count = run_crawl(keyword, max_count)
+    
+    if not crawl_success:
+        return {
+            "crawl_success": False,
+            "crawl_message": crawl_message,
+            "post_count": 0,
+            "digest_result": {
+                "success": False,
+                "message": "爬取失败，无法生成摘要"
+            }
+        }
+    
+    # Step 2: 生成摘要
+    digest_result = run_digest_generation(keyword, hours)
+    
+    return {
+        "crawl_success": True,
+        "crawl_message": crawl_message,
+        "post_count": post_count,
+        "digest_result": digest_result
+    }
 
 if __name__ == "__main__":
     # Test run
