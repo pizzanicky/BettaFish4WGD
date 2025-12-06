@@ -29,25 +29,47 @@ from MindSpider.DeepSentimentCrawling.MediaCrawler.database.models import WeiboN
 # Import prompt
 from DailyDigest.prompts import DAILY_DIGEST_PROMPT
 
-# Import LLM Client
-from InsightEngine.llms.base import LLMClient
+# Import Google Gemini SDK
+import google.generativeai as genai
 
 class SimpleLLM:
-    """Simple wrapper around LLMClient for easy use"""
+    """Simple wrapper around Google Gemini API"""
     def __init__(self):
-        # Load LLM config from environment
-        api_key = settings.INSIGHT_ENGINE_API_KEY or os.getenv("INSIGHT_ENGINE_API_KEY")
-        base_url = settings.INSIGHT_ENGINE_BASE_URL or os.getenv("INSIGHT_ENGINE_BASE_URL")
-        model_name = settings.INSIGHT_ENGINE_MODEL_NAME or os.getenv("INSIGHT_ENGINE_MODEL_NAME", "gpt-4")
+        # Load Google Gemini config from environment
+        api_key = os.getenv("GOOGLE_API_KEY")
+        model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.0-flash-exp")
         
         if not api_key:
-            raise ValueError("INSIGHT_ENGINE_API_KEY is not configured")
+            raise ValueError("GOOGLE_API_KEY is not configured in .env file")
         
-        self.client = LLMClient(api_key=api_key, model_name=model_name, base_url=base_url)
+        # Configure Google Gemini
+        genai.configure(api_key=api_key)
+        
+        # Initialize the model
+        self.model = genai.GenerativeModel(model_name)
+        self.model_name = model_name
+        
+        logger.info(f"[SimpleLLM] Initialized Google Gemini: {model_name}")
     
     def chat(self, prompt: str) -> str:
-        """Simple chat interface"""
-        return self.client.invoke(system_prompt="You are a helpful assistant.", user_prompt=prompt)
+        """Simple chat interface using Google Gemini"""
+        try:
+            logger.info(f"[SimpleLLM] Sending request to {self.model_name}")
+            
+            # Generate content using Gemini
+            response = self.model.generate_content(prompt)
+            
+            # Extract text from response
+            if response and response.text:
+                logger.info(f"[SimpleLLM] Received response ({len(response.text)} chars)")
+                return response.text
+            else:
+                logger.error("[SimpleLLM] Empty response from Gemini")
+                raise ValueError("Empty response from Gemini API")
+                
+        except Exception as e:
+            logger.error(f"[SimpleLLM] Error calling Gemini API: {e}")
+            raise
 
 class DailyDigest:
     def __init__(self):
